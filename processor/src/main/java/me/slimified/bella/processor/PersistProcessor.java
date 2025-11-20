@@ -9,10 +9,14 @@ import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.*;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
 import javax.sql.DataSource;
 import java.io.IOException;
+import java.lang.annotation.ElementType;
 import java.sql.*;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -36,9 +40,58 @@ public final class PersistProcessor extends AbstractProcessor {
                     }
                 }
 
-                if (!element.getKind().isClass()) continue;
+                final ElementKind kind = element.getKind();
+                if (!kind.isClass()) continue;
                 final TypeElement typeElement = (TypeElement) element;
                 final TypeName typeName = TypeName.get(typeElement.asType());
+                final List<? extends Element> elements;
+                if (kind == ElementKind.CLASS) {
+                    elements = typeElement.getEnclosedElements()
+                            .stream()
+                            .filter(e -> e.getKind().isField())
+                            .toList();
+                } else if (kind == ElementKind.RECORD) {
+                    elements = typeElement.getRecordComponents();
+                } else {
+                    continue;
+                }
+                final int elementsSize = elements.size();
+                final StringBuilder createSchema = new StringBuilder("(");
+                createSchema.append("id INT PRIMARY KEY, ");
+                for (int i = 0; i < elementsSize; i++) {
+                    final Element e = elements.get(i);
+                    createSchema
+                            .append(e.getSimpleName())
+                            .append(" ")
+                            .append(typeToSqlTypeName(e));
+                    if (i != elementsSize - 1) {
+                        createSchema.append(", ");
+                    } else {
+                        createSchema.append(")");
+                    }
+                }
+                final StringBuilder schema = new StringBuilder("(");
+                for (int i = 0; i < elementsSize; i++) {
+                    final Element e = elements.get(i);
+                    schema.append(e.getSimpleName());
+                    if (i != elementsSize - 1) {
+                        schema.append(", ");
+                    } else {
+                        schema.append(")");
+                    }
+                }
+                final StringBuilder fields = new StringBuilder();
+                for (int i = 0; i < elementsSize; i++) {
+                    final Element e =  elements.get(i);
+                    if (e instanceof RecordComponentElement) {
+                        fields.append("value.").append(e.getSimpleName()).append("()");
+                    } else {
+                        fields.append("value.").append(e.getSimpleName());
+                    }
+                    if (i < elementsSize - 1) {
+                        fields.append(", ");
+                    }
+                }
 
                 final ParameterSpec typeParameter = ParameterSpec
                         .builder(typeName, "value")
@@ -50,20 +103,24 @@ public final class PersistProcessor extends AbstractProcessor {
                         .addParameter(typeParameter)
                         .returns(long.class)
                         .beginControlFlow("try")
+                        .addStatement("createTableIfNotExists()")
                         .addStatement("final $T conn = dataSource.getConnection()", Connection.class)
-                        .addStatement("final $T builder = new StringBuilder()", StringBuilder.class)
-                        .addStatement("final Object[] fields = new Object[] {}")
+                        .addStatement("final $T builder = new StringBuilder($S)", StringBuilder.class, "(")
+                        .addStatement("final Object[] fields = new Object[] { $L }", fields.toString())
                         .beginControlFlow("for (int i = 0; i < fields.length; i++)")
-                        .beginControlFlow("if (i == fields.length - 1)")
-                        .addStatement("builder.append($S)", "?)")
-                        .nextControlFlow("else")
-                        .addStatement("builder.append($S)", "?, ")
+                        .addStatement("builder.append($S)", "?")
+                        .beginControlFlow("if (i < fields.length - 1)")
+                        .addStatement("builder.append($S)", ", ")
                         .endControlFlow()
                         .endControlFlow()
-                        .addStatement("final $T ps = conn.prepareStatement($S + table + $S + builder.toString())",
+                        .addStatement("builder.append($S)", ")")
+                        .addStatement("final $T ps = conn.prepareStatement($S + table + $S + $S + builder.toString(), $T.RETURN_GENERATED_KEYS)",
                                 PreparedStatement.class,
                                 "INSERT INTO ",
-                                " VALUES ")
+                                " " + schema,
+                                " VALUES ",
+                                Statement.class
+                                )
                         .beginControlFlow("for (int i = 0; i < fields.length; i++)")
                         .addStatement("final Object field = fields[i]")
                         .beginControlFlow("if (field instanceof Integer integer)")
@@ -71,11 +128,11 @@ public final class PersistProcessor extends AbstractProcessor {
                         .nextControlFlow("else if (field instanceof String string)")
                         .addStatement("ps.setString(i + 1, string)")
                         .endControlFlow()
+                        .endControlFlow()
                         .addStatement("ps.executeUpdate()")
                         .beginControlFlow("try ($T rs = ps.getGeneratedKeys())", ResultSet.class)
                         .beginControlFlow("if (rs.next())")
                         .addStatement("return rs.getLong(1)")
-                        .endControlFlow()
                         .endControlFlow()
                         .endControlFlow()
                         .nextControlFlow("catch ($T e)", SQLException.class)
@@ -95,7 +152,7 @@ public final class PersistProcessor extends AbstractProcessor {
                         .beginControlFlow("try")
                         .addStatement("final $T conn = dataSource.getConnection()", Connection.class)
                         .addStatement("final $T stmt = conn.createStatement()", Statement.class)
-                        .addStatement("stmt.execute($S)", "CREATE TABLE IF NOT EXISTS " + table + " ()") // TODO: fix this shit by putting proper schema definition
+                        .addStatement("stmt.execute($S)", "CREATE TABLE IF NOT EXISTS " + table + createSchema) // TODO: fix this shit by putting proper schema definition
                         .nextControlFlow("catch ($T e)", SQLException.class)
                         .addStatement("e.printStackTrace()")
                         .endControlFlow()
@@ -163,5 +220,28 @@ public final class PersistProcessor extends AbstractProcessor {
             }
         }
         return true;
+    }
+    private String typeToSqlTypeName(Element element) {
+        final TypeMirror mirror = element.asType();
+        return switch (mirror.getKind()) {
+            case INT -> "INT";
+            case LONG -> "BIGINT";
+            case FLOAT -> "REAL";
+            case DOUBLE -> "DOUBLE";
+            case BOOLEAN -> "BOOLEAN";
+            case CHAR, BYTE, SHORT -> "SMALLINT";
+            case DECLARED -> declaredTypeToSql(mirror);
+
+            default -> "TEXT";
+        };
+    }
+
+    private String declaredTypeToSql(TypeMirror mirror) {
+        String name = mirror.toString();
+
+        return switch (name) {
+            case "java.lang.String" -> "VARCHAR";
+            default -> "TEXT";
+        };
     }
 }
