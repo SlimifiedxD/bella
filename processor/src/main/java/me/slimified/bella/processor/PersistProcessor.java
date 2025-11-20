@@ -137,7 +137,7 @@ public final class PersistProcessor extends AbstractProcessor {
                         .nextControlFlow("catch ($T e)", SQLException.class)
                         .addStatement("e.printStackTrace()")
                         .endControlFlow()
-                        .addStatement("throw new $T($S)", RuntimeException.class, "Shit has hit the fan. It is all over the walls and ceiling.")
+                        .addStatement("throw new $T($S)", RuntimeException.class, "Something went wrong whilst inserting!")
                         .build();
                 final FieldSpec dataSourceField = FieldSpec
                         .builder(DataSource.class, "dataSource", Modifier.PRIVATE, Modifier.FINAL)
