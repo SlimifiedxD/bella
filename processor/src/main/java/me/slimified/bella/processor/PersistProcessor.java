@@ -102,9 +102,8 @@ public final class PersistProcessor extends AbstractProcessor {
                         .addModifiers(Modifier.PUBLIC)
                         .addParameter(typeParameter)
                         .returns(long.class)
-                        .beginControlFlow("try")
+                        .beginControlFlow("try (final $T conn = dataSource.getConnection())", Connection.class)
                         .addStatement("createTableIfNotExists()")
-                        .addStatement("final $T conn = dataSource.getConnection()", Connection.class)
                         .addStatement("final $T builder = new StringBuilder($S)", StringBuilder.class, "(")
                         .addStatement("final Object[] fields = new Object[] { $L }", fields.toString())
                         .beginControlFlow("for (int i = 0; i < fields.length; i++)")
@@ -149,8 +148,7 @@ public final class PersistProcessor extends AbstractProcessor {
                 final MethodSpec createTableSpec = MethodSpec
                         .methodBuilder("createTableIfNotExists")
                         .addModifiers(Modifier.PRIVATE)
-                        .beginControlFlow("try")
-                        .addStatement("final $T conn = dataSource.getConnection()", Connection.class)
+                        .beginControlFlow("try (final $T conn = dataSource.getConnection())", Connection.class)
                         .addStatement("final $T stmt = conn.createStatement()", Statement.class)
                         .addStatement("stmt.execute($S)", "CREATE TABLE IF NOT EXISTS " + table + createSchema) // TODO: fix this shit by putting proper schema definition
                         .nextControlFlow("catch ($T e)", SQLException.class)
