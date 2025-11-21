@@ -15,10 +15,7 @@ import javax.sql.DataSource;
 import java.io.IOException;
 import java.lang.annotation.ElementType;
 import java.sql.*;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 @SupportedAnnotationTypes("me.slimified.bella.core.annotation.Persist")
 @SupportedSourceVersion(SourceVersion.RELEASE_21)
@@ -57,7 +54,7 @@ public final class PersistProcessor extends AbstractProcessor {
                 }
                 final int elementsSize = elements.size();
                 final StringBuilder createSchema = new StringBuilder("(");
-                createSchema.append("id INT PRIMARY KEY, ");
+                createSchema.append("id INT PRIMARY KEY AUTOINCREMENT, ");
                 for (int i = 0; i < elementsSize; i++) {
                     final Element e = elements.get(i);
                     createSchema
@@ -139,6 +136,14 @@ public final class PersistProcessor extends AbstractProcessor {
                         .endControlFlow()
                         .addStatement("throw new $T($S)", RuntimeException.class, "Something went wrong whilst inserting!")
                         .build();
+                final MethodSpec findByIdMethod = MethodSpec
+                        .methodBuilder("findById")
+                        .addAnnotation(Override.class)
+                        .addModifiers(Modifier.PUBLIC)
+                        .addParameter(TypeName.LONG, "id")
+                        .returns(ParameterizedTypeName.get(ClassName.get(Optional.class), typeName))
+                        .addStatement("return Optional.empty()")
+                        .build();
                 final FieldSpec dataSourceField = FieldSpec
                         .builder(DataSource.class, "dataSource", Modifier.PRIVATE, Modifier.FINAL)
                         .build();
@@ -173,6 +178,7 @@ public final class PersistProcessor extends AbstractProcessor {
                         .addMethod(createTableSpec)
                         .addField(dataSourceField)
                         .addField(tableField)
+                        .addMethod(findByIdMethod)
                         .build();
                 final JavaFile generatedRepository = JavaFile
                         .builder(BASE_GENERATED_PACKAGE, repositoryImplType)
